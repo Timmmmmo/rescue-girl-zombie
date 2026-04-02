@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>营救女孩 - 僵尸围城</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a0a2e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: 'Arial', sans-serif;
+  overflow: hidden;
+  touch-action: none;
+}
+#gameContainer {
+  position: relative;
+  width: 400px;
+  height: 700px;
+}
+canvas {
+  display: block;
+  border-radius: 12px;
+  box-shadow: 0 0 30px rgba(0,200,100,0.3);
+}
+#ui-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+#score-panel {
+  position: absolute;
+  top: 10px; left: 10px; right: 10px;
+  display: flex;
+  justify-content: space-between;
+  color: #fff;
+  font-size: 16px;
+  font-weight: bold;
+  text-shadow: 0 0 8px rgba(0,0,0,0.8);
+  pointer-events: none;
+}
+#combo-display {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #ffeb3b;
+  font-size: 48px;
+  font-weight: bold;
+  text-shadow: 0 0 20px rgba(255,235,59,0.8);
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+/* Start / Game Over screens */
+.screen-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0,0,0,0.85);
+  z-index: 20;
+  pointer-events: all;
+}
+.screen-overlay.hidden { display: none; }
+.screen-overlay h1 {
+  color: #4caf50;
+  font-size: 36px;
+  margin-bottom: 10px;
+  text-shadow: 0 0 20px rgba(76,175,80,0.6);
+}
+.screen-overlay h2 {
+  color: #f44336;
+  font-size: 28px;
+  margin-bottom: 10px;
+}
+.screen-overlay p {
+  color: #ccc;
+  font-size: 14px;
+  margin: 5px 20px;
+  text-align: center;
+  line-height: 1.6;
+}
+.screen-overlay .score-final {
+  color: #ffeb3b;
+  font-size: 24px;
+  margin: 15px 0;
+}
+.btn-play {
+  margin-top: 25px;
+  padding: 15px 50px;
+  font-size: 22px;
+  font-weight: bold;
+  color: #fff;
+  background: linear-gradient(135deg, #4caf50, #2e7d32);
+  border: none;
+  border-radius: 30px;
+  cursor: pointer;
+  pointer-events: all;
+  box-shadow: 0 4px 15px rgba(76,175,80,0.4);
+  transition: transform 0.15s;
+}
+.btn-play:active { transform: scale(0.95); }
+.zombie-emoji { font-size: 60px; margin: 10px 0; }
+</style>
+</head>
+<body>
+
+<div id="gameContainer">
+  <canvas id="gameCanvas" width="400" height="700"></canvas>
+
+  <div id="ui-overlay">
+    <div id="score-panel">
+      <span id="level-text">第 1 关</span>
+      <span id="score-text">分数: 0</span>
+    </div>
+    <div id="combo-display"></div>
+  </div>
+
+  <!-- Start Screen -->
+  <div class="screen-overlay" id="startScreen">
+    <div class="zombie-emoji">🧟‍♂️</div>
+    <h1>营救女孩</h1>
+    <p style="color:#4caf50; font-size:18px; font-weight:bold;">僵尸围城</p>
+    <p>僵尸正在逼近女孩！<br>点击对应颜色的大炮，消灭僵尸！<br>犹豫就会败北！</p>
+    <button class="btn-play" id="btnStart">开始营救</button>
+  </div>
+
+  <!-- Game Over Screen -->
+  <div class="screen-overlay hidden" id="gameOverScreen">
+    <div class="zombie-emoji">💀</div>
+    <h2>营救失败</h2>
+    <p>女孩被僵尸抓走了...</p>
+    <div class="score-final" id="finalScore">分数: 0</div>
+    <p id="finalLevel">到达第 1 关</p>
+    <button class="btn-play" id="btnRestart">重新营救</button>
+  </div>
+
+  <!-- Win Screen -->
+  <div class="screen-overlay hidden" id="winScreen">
+    <div style="font-size:60px; margin:10px 0;">🎉</div>
+    <h1 style="color:#ffeb3b;">营救成功!</h1>
+    <p>你击退了所有僵尸，女孩安全了！</p>
+    <div class="score-final" id="winScore">分数: 0</div>
+    <button class="btn-play" id="btnNextLevel">下一关</button>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// 营救女孩 - 僵尸围城  (H5 Canvas Game)
+// ============================================================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Responsive sizing
+function resize() {
+  const container = document.getElementById('gameContainer');
+  const maxW = Math.min(window.innerWidth, 400);
+  const maxH = Math.min(window.innerHeight, 700);
+  const scale = Math.min(maxW / 400, maxH / 700);
+  container.style.transform = `scale(${scale})`;
+  container.style.transformOrigin = 'center center';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---- Constants ----
+const W = 400, H = 700;
+const CANNON_Y = 600;
+const GIRL_X = 200, GIRL_Y = 80;
+const COLORS = ['#f44336', '#2196f3', '#4caf50', '#ff9800', '#9c27b0'];
+const COLOR_NAMES = ['红', '蓝', '绿', '橙', '紫'];
+const CANNON_COUNT = 5;
+const CANNON_SPACING = W / (CANNON_COUNT + 1);
+
+// ---- Game State ----
+let state = {
+  phase: 'start', // start | playing | over | win
+  level: 1,
+  score: 0,
+  combo: 0,
+  maxCombo: 0,
+  zombies: [],
+  bullets: [],
+  particles: [],
+  cannons: [],
+  cannonCooldowns: [],
+  girlHP: 5,
+  maxGirlHP: 5,
+  zombieSpeed: 0.3,
+  spawnTimer: 0,
+  spawnInterval: 120,
+  zombiesPerWave: 5,
+  zombiesSpawned: 0,
+  zombiesDefeated: 0,
+  totalZombiesInLevel: 0,
+  screenShake: 0,
+  comboTimer: 0,
+  flashColor: null,
+  flashTimer: 0,
+};
+
+// ---- Init Cannons ----
+function initCannons() {
+  state.cannons = [];
+  state.cannonCooldowns = [];
+  for (let i = 0; i < CANNON_COUNT; i++) {
+    state.cannons.push({
+      x: CANNON_SPACING * (i + 1),
+      y: CANNON_Y,
+      color: COLORS[i],
+      colorName: COLOR_NAMES[i],
+      recoil: 0,
+    });
+    state.cannonCooldowns.push(0);
+  }
+}
+
+// ---- Zombie Class ----
+function createZombie(colorIdx) {
+  const segCount = 2 + Math.floor(Math.random() * Math.min(state.level, 4));
+  const segments = [];
+  for (let i = 0; i < segCount; i++) {
+    segments.push({
+      colorIdx: Math.floor(Math.random() * CANNON_COUNT),
+      hp: 1,
+      alive: true,
+    });
+  }
+  // Path: zombie walks from right/top area towards girl
+  const startX = 350 + Math.random() * 60;
+  const startY = 150 + Math.random() * 350;
+  return {
+    x: startX,
+    y: startY,
+    targetX: GIRL_X + (Math.random() - 0.5) * 60,
+    targetY: GIRL_Y + 20,
+    segments: segments,
+    speed: state.zombieSpeed + Math.random() * 0.15,
+    alive: true,
+    reachedGirl: false,
+    walkFrame: 0,
+    size: 28 + segCount * 4,
+    hitFlash: 0,
+  };
+}
+
+// ---- Spawn ----
+function spawnWave() {
+  if (state.zombiesSpawned >= state.totalZombiesInLevel) return;
+  const count = Math.min(
+    1 + Math.floor(state.level / 2),
+    state.totalZombiesInLevel - state.zombiesSpawned
+  );
+  for (let i = 0; i < count; i++) {
+    state.zombies.push(createZombie());
+    state.zombiesSpawned++;
+  }
+}
+
+// ---- Particle Effects ----
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    state.particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: (Math.random() - 0.5) * 6 - 2,
+      life: 30 + Math.random() * 20,
+      maxLife: 50,
+      color,
+      size: 3 + Math.random() * 4,
+    });
+  }
+}
+
+function spawnExplosion(x, y, color) {
+  spawnParticles(x, y, color, 15);
+  // extra white sparks
+  spawnParticles(x, y, '#fff', 5);
+}
+
+// ---- Shoot ----
+function shootCannon(cannonIdx) {
+  if (state.phase !== 'playing') return;
+  if (state.cannonCooldowns[cannonIdx] > 0) return;
+
+  const cannon = state.cannons[cannonIdx];
+  cannon.recoil = 8;
+  state.cannonCooldowns[cannonIdx] = 12;
+
+  state.bullets.push({
+    x: cannon.x,
+    y: cannon.y - 20,
+    vy: -8,
+    colorIdx: cannonIdx,
+    color: cannon.color,
+    size: 8,
+    trail: [],
+  });
+}
+
+// ---- Input ----
+function handleTap(px, py) {
+  if (state.phase !== 'playing') return;
+
+  // Check cannon taps
+  for (let i = 0; i < CANNON_COUNT; i++) {
+    const c = state.cannons[i];
+    const dx = px - c.x;
+    const dy = py - c.y;
+    if (dx * dx + dy * dy < 50 * 50) {
+      shootCannon(i);
+      return;
+    }
+  }
+  // Also allow tapping bottom half to shoot nearest cannon
+  if (py > H * 0.6) {
+    let nearest = 0, minDist = Infinity;
+    for (let i = 0; i < CANNON_COUNT; i++) {
+      const d = Math.abs(px - state.cannons[i].x);
+      if (d < minDist) { minDist = d; nearest = i; }
+    }
+    shootCannon(nearest);
+  }
+}
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const scale = W / rect.width;
+  const t = e.touches[0];
+  handleTap((t.clientX - rect.left) * scale, (t.clientY - rect.top) * scale);
+}, { passive: false });
+
+canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const scale = W / rect.width;
+  handleTap((e.clientX - rect.left) * scale, (e.clientY - rect.top) * scale);
+});
+
+// ---- Update ----
+function update() {
+  if (state.phase !== 'playing') return;
+
+  // Spawn
+  state.spawnTimer++;
+  if (state.spawnTimer >= state.spawnInterval && state.zombiesSpawned < state.totalZombiesInLevel) {
+    spawnWave();
+    state.spawnTimer = 0;
+  }
+
+  // Cooldowns
+  for (let i = 0; i < CANNON_COUNT; i++) {
+    if (state.cannonCooldowns[i] > 0) state.cannonCooldowns[i]--;
+    if (state.cannons[i].recoil > 0) state.cannons[i].recoil *= 0.85;
+  }
+
+  // Bullets
+  for (let b of state.bullets) {
+    b.trail.push({ x: b.x, y: b.y });
+    if (b.trail.length > 6) b.trail.shift();
+    b.y += b.vy;
+  }
+  state.bullets = state.bullets.filter(b => b.y > -20);
+
+  // Zombies
+  for (let z of state.zombies) {
+    if (!z.alive) continue;
+
+    // Move towards girl
+    const dx = z.targetX - z.x;
+    const dy = z.targetY - z.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > 2) {
+      z.x += (dx / dist) * z.speed;
+      z.y += (dy / dist) * z.speed;
+    }
+
+    z.walkFrame += 0.05;
+    if (z.hitFlash > 0) z.hitFlash--;
+
+    // Check if reached girl
+    const distToGirl = Math.sqrt((z.x - GIRL_X) ** 2 + (z.y - GIRL_Y) ** 2);
+    if (distToGirl < 40) {
+      z.reachedGirl = true;
+      z.alive = false;
+      state.girlHP--;
+      state.screenShake = 15;
+      state.combo = 0;
+      spawnParticles(GIRL_X, GIRL_Y, '#f44336', 10);
+
+      if (state.girlHP <= 0) {
+        gameOver();
+        return;
+      }
+    }
+  }
+
+  // Bullet-Zombie collision
+  for (let b of state.bullets) {
+    for (let z of state.zombies) {
+      if (!z.alive) continue;
+      const dx = b.x - z.x;
+      const dy = b.y - z.y;
+      if (dx * dx + dy * dy < (z.size + b.size) ** 2) {
+        // Find matching segment
+        let hit = false;
+        for (let seg of z.segments) {
+          if (seg.alive && seg.colorIdx === b.colorIdx) {
+            seg.alive = false;
+            hit = true;
+            state.score += 10 * (1 + state.combo * 0.5);
+            state.combo++;
+            if (state.combo > state.maxCombo) state.maxCombo = state.combo;
+            state.comboTimer = 90;
+
+            spawnExplosion(b.x, b.y, b.color);
+            state.flashColor = b.color;
+            state.flashTimer = 5;
+            break;
+          }
+        }
+        if (!hit) {
+          // Wrong color - small penalty
+          spawnParticles(b.x, b.y, '#888', 3);
+          state.combo = 0;
+        }
+
+        // Check if zombie is fully dead
+        const aliveSegs = z.segments.filter(s => s.alive);
+        if (aliveSegs.length === 0) {
+          z.alive = false;
+          state.zombiesDefeated++;
+          state.score += 50;
+          spawnExplosion(z.x, z.y, '#4caf50');
+
+          // Check win
+          if (state.zombiesDefeated >= state.totalZombiesInLevel) {
+            winLevel();
+            return;
+          }
+        }
+
+        b.y = -100; // remove bullet
+        z.hitFlash = 8;
+        break;
+      }
+    }
+  }
+
+  // Combo decay
+  if (state.comboTimer > 0) {
+    state.comboTimer--;
+    if (state.comboTimer <= 0) state.combo = 0;
+  }
+
+  // Particles
+  for (let p of state.particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.15;
+    p.life--;
+  }
+  state.particles = state.particles.filter(p => p.life > 0);
+
+  // Screen shake decay
+  if (state.screenShake > 0) state.screenShake *= 0.9;
+  if (state.flashTimer > 0) state.flashTimer--;
+
+  // Clean dead zombies
+  state.zombies = state.zombies.filter(z => z.alive || z.hitFlash > 0);
+
+  // Update UI
+  document.getElementById('level-text').textContent = `第 ${state.level} 关`;
+  document.getElementById('score-text').textContent = `分数: ${Math.floor(state.score)}`;
+
+  // Combo display
+  const comboEl = document.getElementById('combo-display');
+  if (state.combo >= 3) {
+    comboEl.textContent = `${state.combo}连击!`;
+    comboEl.style.opacity = '1';
+  } else {
+    comboEl.style.opacity = '0';
+  }
+}
+
+// ---- Draw ----
+function draw() {
+  ctx.save();
+
+  // Screen shake
+  if (state.screenShake > 0.5) {
+    const sx = (Math.random() - 0.5) * state.screenShake;
+    const sy = (Math.random() - 0.5) * state.screenShake;
+    ctx.translate(sx, sy);
+  }
+
+  // Background
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#0d1b2a');
+  bgGrad.addColorStop(0.5, '#1b2838');
+  bgGrad.addColorStop(1, '#2d1b4e');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Ground
+  ctx.fillStyle = '#2a1a0a';
+  ctx.fillRect(0, CANNON_Y - 30, W, H - CANNON_Y + 30);
+  ctx.fillStyle = '#3d2b1a';
+  ctx.fillRect(0, CANNON_Y - 30, W, 4);
+
+  // Flash effect
+  if (state.flashTimer > 0 && state.flashColor) {
+    ctx.fillStyle = state.flashColor + '20';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Draw Girl
+  drawGirl();
+
+  // Draw Zombies
+  for (let z of state.zombies) {
+    if (z.alive || z.hitFlash > 0) drawZombie(z);
+  }
+
+  // Draw Bullets
+  for (let b of state.bullets) {
+    // Trail
+    for (let i = 0; i < b.trail.length; i++) {
+      const t = b.trail[i];
+      const alpha = (i / b.trail.length) * 0.5;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, b.size * (i / b.trail.length), 0, Math.PI * 2);
+      ctx.fillStyle = b.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
+      ctx.fill();
+    }
+    // Bullet
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
+    ctx.fillStyle = b.color;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(b.x - 2, b.y - 2, b.size * 0.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fill();
+  }
+
+  // Draw Cannons
+  for (let i = 0; i < CANNON_COUNT; i++) {
+    drawCannon(state.cannons[i], i);
+  }
+
+  // Draw Particles
+  for (let p of state.particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // HP bar for girl
+  drawHPBar();
+
+  // Level progress
+  if (state.phase === 'playing') {
+    const progress = state.zombiesDefeated / state.totalZombiesInLevel;
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(20, 660, W - 40, 8);
+    ctx.fillStyle = '#4caf50';
+    ctx.fillRect(20, 660, (W - 40) * progress, 8);
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`消灭: ${state.zombiesDefeated}/${state.totalZombiesInLevel}`, W / 2, 685);
+  }
+
+  ctx.restore();
+}
+
+function drawGirl() {
+  const x = GIRL_X, y = GIRL_Y;
+  // Glow
+  const glow = ctx.createRadialGradient(x, y, 10, x, y, 50);
+  glow.addColorStop(0, 'rgba(255,105,180,0.3)');
+  glow.addColorStop(1, 'rgba(255,105,180,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(x - 50, y - 50, 100, 100);
+
+  // Body
+  ctx.fillStyle = '#ff69b4';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 20, 14, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Head
+  ctx.fillStyle = '#ffe0bd';
+  ctx.beginPath();
+  ctx.arc(x, y - 8, 14, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Hair
+  ctx.fillStyle = '#8B4513';
+  ctx.beginPath();
+  ctx.arc(x, y - 14, 14, Math.PI, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(x - 14, y - 14, 4, 20);
+  ctx.fillRect(x + 10, y - 14, 4, 20);
+
+  // Eyes
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(x - 5, y - 8, 2, 0, Math.PI * 2);
+  ctx.arc(x + 5, y - 8, 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Mouth (worried)
+  ctx.strokeStyle = '#c0392b';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x, y + 2, 4, 0.2, Math.PI - 0.2);
+  ctx.stroke();
+
+  // "Help!" text
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('救命!', x, y - 30);
+
+  // Arms reaching out
+  ctx.strokeStyle = '#ffe0bd';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x - 12, y + 10);
+  ctx.lineTo(x - 22, y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + 12, y + 10);
+  ctx.lineTo(x + 22, y);
+  ctx.stroke();
+}
+
+function drawZombie(z) {
+  const { x, y, segments, size, hitFlash, walkFrame, alive } = z;
+
+  ctx.save();
+  if (!alive) {
+    ctx.globalAlpha = hitFlash / 8;
+  }
+
+  // Hit flash
+  if (hitFlash > 0) {
+    ctx.fillStyle = '#fff';
+  }
+
+  // Wobble walk
+  const wobble = Math.sin(walkFrame * 3) * 3;
+
+  // Body (green zombie)
+  const bodyColor = hitFlash > 0 ? '#fff' : '#4a7a4a';
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.ellipse(x + wobble, y + 10, size * 0.5, size * 0.6, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Head
+  const headColor = hitFlash > 0 ? '#fff' : '#6a9a5a';
+  ctx.fillStyle = headColor;
+  ctx.beginPath();
+  ctx.arc(x + wobble, y - size * 0.3, size * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Eyes (red)
+  ctx.fillStyle = alive ? '#f44336' : '#888';
+  ctx.beginPath();
+  ctx.arc(x + wobble - 5, y - size * 0.3, 3, 0, Math.PI * 2);
+  ctx.arc(x + wobble + 5, y - size * 0.3, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Arms reaching forward
+  ctx.strokeStyle = bodyColor;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(x + wobble - size * 0.4, y + 5);
+  ctx.lineTo(x + wobble - size * 0.7, y - 5 + Math.sin(walkFrame * 5) * 3);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + wobble + size * 0.4, y + 5);
+  ctx.lineTo(x + wobble + size * 0.7, y - 5 + Math.sin(walkFrame * 5 + 1) * 3);
+  ctx.stroke();
+
+  // Color segments (as colored orbs on the zombie)
+  let segY = y - size * 0.5;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (!seg.alive) continue;
+    const sx = x + wobble + (i % 2 === 0 ? -8 : 8);
+    const sy = segY - i * 14;
+
+    // Glowing orb
+    ctx.beginPath();
+    ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+    ctx.fillStyle = COLORS[seg.colorIdx];
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.fill();
+  }
+
+  // Legs
+  ctx.strokeStyle = bodyColor;
+  ctx.lineWidth = 4;
+  const legAnim = Math.sin(walkFrame * 4) * 5;
+  ctx.beginPath();
+  ctx.moveTo(x + wobble - 6, y + size * 0.5);
+  ctx.lineTo(x + wobble - 6 - legAnim, y + size * 0.5 + 15);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + wobble + 6, y + size * 0.5);
+  ctx.lineTo(x + wobble + 6 + legAnim, y + size * 0.5 + 15);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawCannon(c, idx) {
+  const { x, y, color, recoil } = c;
+  const ry = y + recoil;
+
+  // Base
+  ctx.fillStyle = '#555';
+  ctx.beginPath();
+  ctx.ellipse(x, ry + 5, 22, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Barrel
+  ctx.fillStyle = color;
+  ctx.fillRect(x - 8, ry - 25 + recoil * 0.5, 16, 28);
+
+  // Barrel opening
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.ellipse(x, ry - 25 + recoil * 0.5, 8, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillRect(x - 6, ry - 22 + recoil * 0.5, 4, 20);
+
+  // Color label
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 11px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(COLOR_NAMES[idx], x, ry + 22);
+
+  // Cooldown indicator
+  if (state.cannonCooldowns[idx] > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(x - 12, ry - 28, 24, 4);
+    ctx.fillStyle = color;
+    const cdPct = 1 - state.cannonCooldowns[idx] / 12;
+    ctx.fillRect(x - 12, ry - 28, 24 * cdPct, 4);
+  }
+}
+
+function drawHPBar() {
+  const barW = 120, barH = 10;
+  const barX = GIRL_X - barW / 2;
+  const barY = GIRL_Y - 45;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+
+  const hpPct = state.girlHP / state.maxGirlHP;
+  const hpColor = hpPct > 0.5 ? '#4caf50' : hpPct > 0.25 ? '#ff9800' : '#f44336';
+  ctx.fillStyle = hpColor;
+  ctx.fillRect(barX, barY, barW * hpPct, barH);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '10px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(`❤️ ${state.girlHP}/${state.maxGirlHP}`, GIRL_X, barY - 3);
+}
+
+// ---- Level Management ----
+function startLevel(lvl) {
+  state.level = lvl;
+  state.phase = 'playing';
+  state.zombies = [];
+  state.bullets = [];
+  state.particles = [];
+  state.combo = 0;
+  state.maxCombo = 0;
+  state.comboTimer = 0;
+  state.spawnTimer = 0;
+  state.zombiesSpawned = 0;
+  state.zombiesDefeated = 0;
+  state.screenShake = 0;
+  state.flashTimer = 0;
+  state.girlHP = 5 + Math.floor(lvl / 3);
+  state.maxGirlHP = state.girlHP;
+  state.zombieSpeed = 0.25 + lvl * 0.05;
+  state.totalZombiesInLevel = 5 + lvl * 3;
+  state.spawnInterval = Math.max(60, 120 - lvl * 5);
+
+  initCannons();
+  hideAllScreens();
+}
+
+function gameOver() {
+  state.phase = 'over';
+  document.getElementById('finalScore').textContent = `分数: ${Math.floor(state.score)}`;
+  document.getElementById('finalLevel').textContent = `到达第 ${state.level} 关`;
+  document.getElementById('gameOverScreen').classList.remove('hidden');
+}
+
+function winLevel() {
+  state.phase = 'win';
+  document.getElementById('winScore').textContent = `分数: ${Math.floor(state.score)}`;
+  document.getElementById('winScreen').classList.remove('hidden');
+}
+
+function hideAllScreens() {
+  document.getElementById('startScreen').classList.add('hidden');
+  document.getElementById('gameOverScreen').classList.add('hidden');
+  document.getElementById('winScreen').classList.add('hidden');
+}
+
+// ---- Buttons ----
+document.getElementById('btnStart').addEventListener('click', () => {
+  state.score = 0;
+  startLevel(1);
+});
+document.getElementById('btnRestart').addEventListener('click', () => {
+  state.score = 0;
+  startLevel(1);
+});
+document.getElementById('btnNextLevel').addEventListener('click', () => {
+  startLevel(state.level + 1);
+});
+
+// ---- Game Loop ----
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
