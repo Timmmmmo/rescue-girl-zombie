@@ -187,6 +187,7 @@ function spawnWaveZombies(){
 
 // ---- Particles & Floats ----
 function spawnP(x,y,c,n,spread){
+  if(S.particles.length>300)return; // fix #8: cap particles
   for(let i=0;i<n;i++){
     const a=Math.random()*Math.PI*2,sp=(spread||3)+Math.random()*4;
     S.particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-1.5,l:20+Math.random()*20,ml:40,c,s:2+Math.random()*4});
@@ -224,7 +225,7 @@ function releaseCharge(idx){
   if(!c.charging)return;
 
   const chargeMs=performance.now()-c.chargeStart;
-  const level=Math.min(chargeMs/1000,1);
+  const level=Math.min(chargeMs/600,1); // fix #2: 0.6s full charge
   c.charging=false;
   c.chargeLevel=0;
   c.recoil=6+level*8;
@@ -235,11 +236,13 @@ function releaseCharge(idx){
   const isFull=level>=.95;
   if(isFull)sfxFull();else sfxShoot();
 
-  const power=8+level*10;
+  // fix #1: Fire HORIZONTALLY (rightward) with slight gravity
+  // Zombies come from the right, cannons at bottom fire upward-right
+  const power=8+level*8;
   S.bullets.push({
     x:c.x,y:c.y-30,
-    vx:(Math.random()-.5)*2+level*2,
-    vy:-power*.7,
+    vx:power*.5,        // rightward
+    vy:-power*.4,       // slight upward arc
     ci:idx,color:c.color,
     size:6+level*6,
     penetrative:isFull,level,
@@ -690,6 +693,7 @@ function drawZombie(z){
     cx.fillText('BOSS',x2,y+zsz+10);
   }
 
+  cx.textBaseline='alphabetic'; // fix #4: reset
   cx.restore();
 }
 
@@ -747,7 +751,7 @@ function drawWaveProgress(){
 // ---- Wave Management ----
 function startWave(w){
   S.wave=w;
-  S.waveZombies=5+w*3+Math.floor(w*w*.2);
+  S.waveZombies=3+w*2+Math.floor(w*w*.15); // fix #3: easier start (wave1=5)
   S.waveKilled=0;S.waveSpawned=0;S.spawnTimer=0;
   S.spawnInterval=Math.max(30,90-w*3);
   S.zombies=[];S.bullets=[];S.particles=[];S.floats=[];
@@ -791,9 +795,10 @@ document.getElementById('br').addEventListener('click',btn(()=>{S=freshState();i
 document.getElementById('bn').addEventListener('click',btn(()=>{startWave(S.wave+1)}));
 
 // ---- Loop ----
-const FM=1000/60;let lf=0;
+const FM=1000/60;let lf=-1; // fix #7: -1 = first frame flag
 function gl(ts){
   requestAnimationFrame(gl);
+  if(lf<0){lf=ts;update();draw();return} // fix #7: skip first frame delta
   const el=ts-lf;if(el<FM*.9)return;lf=ts-(el%FM);
   update();draw();
 }
