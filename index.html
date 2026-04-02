@@ -270,6 +270,7 @@ function cannonAt(px,py){
 
 cv.addEventListener('touchstart',e=>{
   e.preventDefault();
+  if(S.inputLock)return; // fix #2: block input during transitions
   for(const t of e.changedTouches){
     const p=s2c(t.clientX,t.clientY);
     const ci=cannonAt(p.x,p.y);
@@ -294,6 +295,7 @@ cv.addEventListener('touchcancel',e=>{
 
 let mouseDown=false;
 cv.addEventListener('mousedown',e=>{
+  if(S.inputLock)return; // fix #2: block input during transitions
   const p=s2c(e.clientX,e.clientY);
   const ci=cannonAt(p.x,p.y);
   if(ci>=0){mouseDown=true;startCharge(ci)}
@@ -399,11 +401,13 @@ function update(){
     // Hit girl?
     if(z.x<GIRL_X+30&&S.girlHitT<=0){
       z.alive=false;S.lives--;S.combo=0;
+      S.waveKilled++; // fix #1: count toward wave progress
       S.shake=18;S.girlHitT=60;
       boom(GIRL_X,GIRL_Y,'#f44336');
       addFloat(GIRL_X,GIRL_Y-40,'-1 ❤️','#f44336');
       sfxHurt();
       if(S.lives<=0){gameOver();return}
+      if(S.waveKilled>=S.waveZombies){waveClear();return}
     }
 
     // fix #1: Zombie escaped off-screen → count as killed (missed opportunity)
@@ -433,9 +437,10 @@ function update(){
   document.getElementById('sc').textContent=`${Math.floor(S.score)} 分`;
   const ce=document.getElementById('cd');
   if(S.combo>=3){
+    const displayCombo=Math.min(S.combo,25); // fix #3: cap display
     ce.textContent=`${S.combo}连击×${(1+S.combo*.3).toFixed(1)}`;
     ce.style.opacity='1';
-    ce.style.transform=`translate(-50%,-50%) scale(${1+Math.min(S.combo,15)*.02})`;
+    ce.style.transform=`translate(-50%,-50%) scale(${1+displayCombo*.02})`;
   }else ce.style.opacity='0';
 }
 
