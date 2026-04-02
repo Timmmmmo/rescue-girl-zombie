@@ -35,16 +35,17 @@ canvas{display:block;border-radius:14px;box-shadow:0 0 40px rgba(100,50,200,.3)}
     <div id="sp">
       <span id="wt">第 1 波</span>
       <span id="sc">0 分</span>
+      <span id="pauseBtn" style="cursor:pointer;pointer-events:all;font-size:20px" onclick="togglePause()">⏸️</span>
     </div>
     <div id="cd"></div>
-    <div id="tip">长按大炮蓄力 → 松开发射 → 颜色匹配造成伤害</div>
+    <div id="tip">长按大炮蓄力 → 松开发射 → 颜色匹配造成伤害 <span id="muteBtn" style="cursor:pointer;pointer-events:all" onclick="toggleMute()">🔊</span></div>
   </div>
 
   <div class="so" id="ss">
     <div class="ze">🧟</div>
     <h1 style="color:#7c4dff">僵尸围城</h1>
     <p style="color:#b388ff;font-size:18px;font-weight:bold">蓄力射击</p>
-    <p>僵尸正在逼近女孩！<br><b>长按</b>对应颜色大炮蓄力<br><b>松手</b>发射炮弹<br>满力蓄能 = 贯穿弹！</p>
+    <p>僵尸正在逼近女孩！<br><b>长按</b>对应颜色大炮蓄力<br><b>松手</b>发射追踪弹<br>满力蓄能 = 贯穿弹！<br><span style="color:#7c4dff">🎯 炮弹自动瞄准最近僵尸</span></p>
     <button class="bp g" id="bs">开始战斗</button>
     <div class="hint">🎯 手动瞄准 · 💪 蓄力机制 · 🔥 连击翻倍</div>
   </div>
@@ -87,7 +88,7 @@ function s2c(cx2,cy){
 }
 
 const W=420,H=740;
-const GIRL_X=60,GIRL_Y=370;
+const GIRL_X=160,GIRL_Y=370; // fix B04: moved right
 const GRAVITY=0.25;
 const COL=['#ff1744','#2979ff','#00e676','#ff9100','#d500f9'];
 const COL_DARK=['#b71c1c','#0d47a1','#1b5e20','#e65100','#4a148c'];
@@ -95,6 +96,29 @@ const CN=['红','蓝','绿','橙','紫'];
 const NC=5;
 const CANNON_Y=650;
 const CANNON_SP=W/(NC+1);
+
+// ---- Pause (B10) ----
+let paused=false;
+function togglePause(){
+  if(S.ph!=='playing')return;
+  paused=!paused;
+  document.getElementById('pauseBtn').textContent=paused?'▶️':'⏸️';
+  if(paused){
+    document.getElementById('tip').textContent='⏸ 游戏暂停中...点击继续';
+  }else{
+    document.getElementById('tip').textContent='长按大炮蓄力 → 松开发射 → 颜色匹配造成伤害';
+  }
+}
+function checkPause(){return paused}
+
+// ---- Mute (B11) ----
+let muted=false;
+function toggleMute(){
+  muted=!muted;
+  document.getElementById('muteBtn').textContent=muted?'🔇':'🔊';
+  if(muted&&ac){ac.close();ac=null;ab=true}
+  else if(!muted){ab=false}
+}
 
 // ---- Audio ----
 let ac=null,ab=false;
@@ -236,17 +260,27 @@ function releaseCharge(idx){
   const isFull=level>=.95;
   if(isFull)sfxFull();else sfxShoot();
 
-  // fix #1: Fire HORIZONTALLY (rightward) with slight gravity
-  // Zombies come from the right, cannons at bottom fire upward-right
-  const power=8+level*8;
+  // fix B05: TRACKING BULLETS - auto-aim at nearest matching zombie
+  let target=null, minDist=Infinity;
+  for(const z of S.zombies){
+    if(!z.alive||z.spawnAnim>8)continue;
+    const hasColor=z.segments.some(s=>s.a&&s.ci===idx);
+    if(!hasColor)continue;
+    const dx=z.x-c.x,dy=z.y-(c.y-25);
+    const d=dx*dx+dy*dy;
+    if(d<minDist){minDist=d;target=z}
+  }
+
+  if(!target){sfxMiss();return} // no valid target
+
   S.bullets.push({
-    x:c.x,y:c.y-30,
-    vx:power*.5,        // rightward
-    vy:-power*.4,       // slight upward arc
+    x:c.x,y:c.y-25,
     ci:idx,color:c.color,
     size:6+level*6,
     penetrative:isFull,level,
     trail:[],dead:false,
+    target, // tracking target
+    speed:10+level*6,
     hitZombies:new Set(),
   });
 
@@ -313,7 +347,7 @@ cv.addEventListener('mouseleave',()=>{
 
 // ---- Update ----
 function update(){
-  if(S.ph!=='playing')return;
+  if(S.ph!=='playing'||paused)return; // fix B10: pause support
 
   for(const c of S.cannons){
     if(c.charging)c.chargeLevel=Math.min((performance.now()-c.chargeStart)/1000,1);
@@ -326,14 +360,23 @@ function update(){
 
   if(S.girlHitT>0)S.girlHitT--;
 
-  // Bullets
+  // Bullets (tracking)
   for(const b of S.bullets){
     if(b.dead)continue;
     b.trail.push({x:b.x,y:b.y,s:b.size});
     if(b.trail.length>12)b.trail.shift();
-    b.vy+=GRAVITY;
-    b.x+=b.vx;b.y+=b.vy;
-    if(b.y>H+20||b.x<-20||b.x>W+20)b.dead=true;
+
+    // fix B05: Track toward target
+    if(!b.target||!b.target.alive){b.dead=true;continue}
+    const bdx=b.target.x-b.x,bdy=b.target.y-b.y;
+    const bd=Math.sqrt(bdx*bdx+bdy*bdy);
+    if(bd<b.target.size+b.size){
+      // Hit! Process collision below
+    }else{
+      b.x+=(bdx/bd)*b.speed;
+      b.y+=(bdy/bd)*b.speed;
+    }
+    if(b.y>H+20||b.y<-20||b.x<-20||b.x>W+80)b.dead=true;
 
     for(const z of S.zombies){
       if(!z.alive||z.spawnAnim>8)continue;
@@ -413,12 +456,13 @@ function update(){
       if(S.waveKilled>=S.waveZombies){waveClear();return}
     }
 
-    // fix #1: Zombie escaped off-screen → count as killed (missed opportunity)
+    // fix #1: Zombie escaped off-screen → penalty not reward
     if(z.x<-40){
       z.alive=false;
-      S.waveKilled++;
+      S.waveKilled++; // still count toward wave completion
       S.combo=0;
-      addFloat(30,z.y,'跑了!','#888');
+      S.score=Math.max(0,S.score-30); // fix B06: -30 penalty
+      addFloat(30,z.y,'跑了!-30','#ff1744');
       if(S.waveKilled>=S.waveZombies){waveClear();return}
     }
   }
@@ -546,7 +590,7 @@ function drawGirl(){
 }
 
 function drawZombie(z){
-  const{x,y,segments,sz:zsz,hf,wf,alive,op,type}=z;
+  const x=z.x,y=z.y,segments=z.segments,zsz=z.size,hf=z.hitFlash,wf=z.walkFrame,alive=z.alive,op=z.opacity,type=z.type; // fix B02: correct property names
   cx.save();cx.globalAlpha=op*(alive?1:hf/6);
   const wb=Math.sin(wf*3)*3;
   const x2=x+wb;
@@ -767,7 +811,7 @@ function waveClear(){
   S.ph='waveclear';S.inputLock=true;
   // Cancel any pending charge
   if(S.pendingCharger!==null){cancelCharge(S.pendingCharger)}
-  const bonus=S.lives*100+S.combo*10;
+  const bonus=S.lives*100+S.maxCombo*10; // fix B07: use maxCombo
   S.score+=bonus;
   document.getElementById('wsc').textContent=`${Math.floor(S.score)} 分 (+${bonus}奖励)`;
   document.getElementById('ws').classList.remove('h');
@@ -777,8 +821,13 @@ function waveClear(){
 function gameOver(){
   S.ph='over';S.inputLock=true;
   if(S.pendingCharger!==null){cancelCharge(S.pendingCharger)}
+
+  // fix B14: high score
+  const hs=parseInt(localStorage.getItem('zombieHS')||'0');
+  if(S.score>hs)localStorage.setItem('zombieHS',Math.floor(S.score));
+
   document.getElementById('fs').textContent=`${Math.floor(S.score)} 分`;
-  document.getElementById('fl').textContent=`坚持到第 ${S.wave} 波`;
+  document.getElementById('fl').textContent=`坚持到第 ${S.wave} 波 | 最高连击: ${S.maxCombo} | 历史最高: ${Math.max(hs,Math.floor(S.score))}`; // fix B12
   document.getElementById('go').classList.remove('h');
   sfxLose();
 }
