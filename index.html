@@ -69,13 +69,11 @@ canvas{display:block;border-radius:14px;box-shadow:0 0 40px rgba(100,50,200,.3)}
 
 <script>
 // ============================================================
-// 僵尸围城 · 蓄力射击  MVP v3.0
-// 核心机制：长按蓄力 + 松开发射 + 抛物线弹道 + 贯穿弹
+// 僵尸围城 · 蓄力射击  MVP v3.1 (QA fix)
 // ============================================================
 const cv = document.getElementById('C');
 const cx = cv.getContext('2d');
 
-// ---- Responsive ----
 function rsz(){
   const c=document.getElementById('G');
   const s=Math.min((window.innerWidth-10)/420,(window.innerHeight-10)/740);
@@ -88,7 +86,6 @@ function s2c(cx2,cy){
   return{x:(cx2-r.left)*(W/r.width),y:(cy-r.top)*(H/r.height)};
 }
 
-// ---- Constants ----
 const W=420,H=740;
 const GIRL_X=60,GIRL_Y=370;
 const GRAVITY=0.25;
@@ -123,21 +120,19 @@ function sfxLose(){[400,350,300,200].forEach((f,i)=>setTimeout(()=>bp(f,.25,'saw
 let S;
 function freshState(){
   return{
-    ph:'start', // start|playing|over|waveclear
-    wave:1,score:0,combo:0,maxCombo:0,comboTimer:0,
+    ph:'start',wave:1,score:0,combo:0,maxCombo:0,comboTimer:0,
     lives:3,maxLives:3,
     zombies:[],bullets:[],particles:[],floats:[],
-    cannons:[], // {x,y,color,idx,charging,chargeStart,chargeLevel}
+    cannons:[],
     waveZombies:0,waveKilled:0,waveSpawned:0,spawnTimer:0,spawnInterval:90,
     shake:0,flash:null,flashT:0,
-    girlHitT:0, // invincible frames
-    inputLock:false,
-    pendingCharger:null, // which cannon is being held
+    girlHitT:0,inputLock:false,
+    pendingCharger:null,
+    lastSpawnY:300, // fix #3: spawn Y separation
   };
 }
 S=freshState();
 
-// ---- Init Cannons ----
 function initCannons(){
   S.cannons=[];
   for(let i=0;i<NC;i++){
@@ -150,8 +145,7 @@ function initCannons(){
   }
 }
 
-// ---- Zombie Types ----
-// type: 'normal'|'fast'|'tank'|'boss'
+// ---- Zombie ----
 function createZombie(type){
   const isBoss=type==='boss';
   const segCount=isBoss?4:1+Math.floor(Math.random()*Math.min(S.wave,3));
@@ -159,38 +153,34 @@ function createZombie(type){
   for(let i=0;i<segCount;i++){
     segments.push({ci:Math.floor(Math.random()*NC),a:true});
   }
-  const yBase=100+Math.random()*450;
-  const speed=type==='fast'?1.8:type==='tank'?.6:isBoss?.4:.8+S.wave*0.06;
+
+  // fix #3: spread Y positions
+  let yBase=S.lastSpawnY+(Math.random()>.5?1:-1)*(50+Math.random()*80);
+  yBase=Math.max(100,Math.min(520,yBase));
+  S.lastSpawnY=yBase;
+
+  // fix #4: speed cap at 2.5
+  const baseSpd=type==='fast'?1.8:type==='tank'?.6:isBoss?.4:.8;
+  const waveSpd=S.wave*0.05;
+  const speed=Math.min(baseSpd+waveSpd,2.5);
+
   return{
-    x:W+20+Math.random()*60,
-    y:yBase,
-    vx:-speed,
-    vy:(Math.random()-.5)*.3,
-    type,
-    segments,
-    alive:true,
+    x:W+20+Math.random()*60,y:yBase,
+    vx:-speed,vy:(Math.random()-.5)*.2,
+    type,segments,alive:true,
     size:isBoss?50:type==='tank'?38:28,
-    hp:isBoss?segCount*2:segCount,
-    maxHp:segCount,
     walkFrame:Math.random()*Math.PI*2,
-    hitFlash:0,
-    opacity:1,
-    spawnAnim:15,
+    hitFlash:0,opacity:1,spawnAnim:15,
   };
 }
 
 function spawnWaveZombies(){
   if(S.waveSpawned>=S.waveZombies)return;
-  // Every 5 waves: boss
   let type='normal';
   const r=Math.random();
-  if(S.wave%5===0&&S.waveSpawned===S.waveZombies-1){
-    type='boss';
-  }else if(S.wave>=3&&r<0.15){
-    type='fast';
-  }else if(S.wave>=4&&r<0.1){
-    type='tank';
-  }
+  if(S.wave%5===0&&S.waveSpawned===S.waveZombies-1)type='boss';
+  else if(S.wave>=3&&r<.15)type='fast';
+  else if(S.wave>=4&&r<.1)type='tank';
   S.zombies.push(createZombie(type));
   S.waveSpawned++;
 }
@@ -198,13 +188,8 @@ function spawnWaveZombies(){
 // ---- Particles & Floats ----
 function spawnP(x,y,c,n,spread){
   for(let i=0;i<n;i++){
-    const a=Math.random()*Math.PI*2;
-    const sp=(spread||3)+Math.random()*4;
-    S.particles.push({
-      x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-1.5,
-      l:20+Math.random()*20,ml:40,c,
-      s:2+Math.random()*4,
-    });
+    const a=Math.random()*Math.PI*2,sp=(spread||3)+Math.random()*4;
+    S.particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-1.5,l:20+Math.random()*20,ml:40,c,s:2+Math.random()*4});
   }
 }
 function boom(x,y,c){spawnP(x,y,c,16,5);spawnP(x,y,'#fff',5,2)}
@@ -223,12 +208,23 @@ function startCharge(idx){
   sfxCharge();
 }
 
+// fix #6: cancelCharge - 长按后拖走取消
+function cancelCharge(idx){
+  const c=S.cannons[idx];
+  if(!c.charging)return;
+  c.charging=false;
+  c.chargeLevel=0;
+  S.pendingCharger=null;
+  // Small visual feedback
+  spawnP(c.x,c.y-20,'#555',3,2);
+}
+
 function releaseCharge(idx){
   const c=S.cannons[idx];
   if(!c.charging)return;
 
   const chargeMs=performance.now()-c.chargeStart;
-  const level=Math.min(chargeMs/1000,1); // 1 second = full charge
+  const level=Math.min(chargeMs/1000,1);
   c.charging=false;
   c.chargeLevel=0;
   c.recoil=6+level*8;
@@ -236,29 +232,21 @@ function releaseCharge(idx){
 
   if(S.ph!=='playing')return;
 
-  // Full charge = penetrating shot!
-  const isFull=level>=0.95;
+  const isFull=level>=.95;
   if(isFull)sfxFull();else sfxShoot();
 
-  // Calculate launch velocity (slight upward arc)
   const power=8+level*10;
-  const angle=-Math.PI/2+(Math.random()-.5)*.15; // mostly upward with slight variation
-
   S.bullets.push({
     x:c.x,y:c.y-30,
-    vx:Math.cos(angle)*power*0.3+(level*2), // slight rightward
-    vy:-power*0.7, // upward
-    ci:idx,
-    color:c.color,
+    vx:(Math.random()-.5)*2+level*2,
+    vy:-power*.7,
+    ci:idx,color:c.color,
     size:6+level*6,
-    penetrative:isFull,
-    level, // 0-1 charge level
-    trail:[],
-    dead:false,
-    hitZombies:new Set(), // for penetrating shots
+    penetrative:isFull,level,
+    trail:[],dead:false,
+    hitZombies:new Set(),
   });
 
-  // Visual feedback
   if(isFull){
     boom(c.x,c.y-30,'#fff');
     addFloat(c.x,c.y-60,'⚡贯穿!','#ffeb3b');
@@ -270,19 +258,14 @@ let activeTouches=new Map();
 
 function cannonAt(px,py){
   for(let i=0;i<NC;i++){
-    const c=S.cannons[i];
-    if(Math.abs(px-c.x)<40&&py>c.y-60)return i;
+    if(Math.abs(px-S.cannons[i].x)<40&&py>S.cannons[i].y-60)return i;
   }
-  // Bottom half → nearest
-  if(py>H*0.5){
+  if(py>H*.5){
     let ni=0,md=Infinity;
-    for(let i=0;i<NC;i++){
-      const d=Math.abs(px-S.cannons[i].x);
-      if(d<md){md=d;ni=i}
-    }
+    for(let i=0;i<NC;i++){const d=Math.abs(px-S.cannons[i].x);if(d<md){md=d;ni=i}}
     return ni;
   }
-  return -1;
+  return-1;
 }
 
 cv.addEventListener('touchstart',e=>{
@@ -290,10 +273,7 @@ cv.addEventListener('touchstart',e=>{
   for(const t of e.changedTouches){
     const p=s2c(t.clientX,t.clientY);
     const ci=cannonAt(p.x,p.y);
-    if(ci>=0){
-      activeTouches.set(t.identifier,ci);
-      startCharge(ci);
-    }
+    if(ci>=0){activeTouches.set(t.identifier,ci);startCharge(ci)}
   }
 },{passive:false});
 
@@ -301,24 +281,17 @@ cv.addEventListener('touchend',e=>{
   e.preventDefault();
   for(const t of e.changedTouches){
     const ci=activeTouches.get(t.identifier);
-    if(ci!==undefined){
-      releaseCharge(ci);
-      activeTouches.delete(t.identifier);
-    }
+    if(ci!==undefined){releaseCharge(ci);activeTouches.delete(t.identifier)}
   }
 },{passive:false});
 
 cv.addEventListener('touchcancel',e=>{
   for(const t of e.changedTouches){
     const ci=activeTouches.get(t.identifier);
-    if(ci!==undefined){
-      releaseCharge(ci);
-      activeTouches.delete(t.identifier);
-    }
+    if(ci!==undefined){cancelCharge(ci);activeTouches.delete(t.identifier)}
   }
 });
 
-// Mouse support
 let mouseDown=false;
 cv.addEventListener('mousedown',e=>{
   const p=s2c(e.clientX,e.clientY);
@@ -326,110 +299,76 @@ cv.addEventListener('mousedown',e=>{
   if(ci>=0){mouseDown=true;startCharge(ci)}
 });
 cv.addEventListener('mouseup',()=>{
-  if(mouseDown&&S.pendingCharger!==null){
-    releaseCharge(S.pendingCharger);
-    mouseDown=false;
-  }
+  if(mouseDown&&S.pendingCharger!==null){releaseCharge(S.pendingCharger);mouseDown=false}
 });
+// fix #2: mouseleave cancels instead of firing
 cv.addEventListener('mouseleave',()=>{
-  if(mouseDown&&S.pendingCharger!==null){
-    releaseCharge(S.pendingCharger);
-    mouseDown=false;
-  }
+  if(mouseDown&&S.pendingCharger!==null){cancelCharge(S.pendingCharger);mouseDown=false}
 });
 
 // ---- Update ----
 function update(){
   if(S.ph!=='playing')return;
 
-  // Update charge visuals
   for(const c of S.cannons){
-    if(c.charging){
-      c.chargeLevel=Math.min((performance.now()-c.chargeStart)/1000,1);
-    }
-    if(c.recoil>0.1)c.recoil*=.88;else c.recoil=0;
+    if(c.charging)c.chargeLevel=Math.min((performance.now()-c.chargeStart)/1000,1);
+    if(c.recoil>.1)c.recoil*=.88;else c.recoil=0;
     c.glowPulse+=.05;
   }
 
-  // Spawn
   S.spawnTimer++;
-  if(S.spawnTimer>=S.spawnInterval&&S.waveSpawned<S.waveZombies){
-    spawnWaveZombies();
-    S.spawnTimer=0;
-  }
+  if(S.spawnTimer>=S.spawnInterval&&S.waveSpawned<S.waveZombies){spawnWaveZombies();S.spawnTimer=0}
 
   if(S.girlHitT>0)S.girlHitT--;
 
-  // ---- Bullets (抛物线弹道) ----
+  // Bullets
   for(const b of S.bullets){
     if(b.dead)continue;
     b.trail.push({x:b.x,y:b.y,s:b.size});
     if(b.trail.length>12)b.trail.shift();
-
-    b.vy+=GRAVITY; // gravity!
-    b.x+=b.vx;
-    b.y+=b.vy;
-
-    // Out of bounds
+    b.vy+=GRAVITY;
+    b.x+=b.vx;b.y+=b.vy;
     if(b.y>H+20||b.x<-20||b.x>W+20)b.dead=true;
 
-    // Hit zombies
     for(const z of S.zombies){
       if(!z.alive||z.spawnAnim>8)continue;
-      if(b.hitZombies.has(z))continue; // penetrating: don't hit same zombie twice
-
+      if(b.hitZombies.has(z))continue;
       const dx=b.x-z.x,dy=b.y-z.y;
-      const hitR=z.size+b.size;
-      if(dx*dx+dy*dy<hitR*hitR){
+      if(dx*dx+dy*dy<(z.size+b.size)**2){
         b.hitZombies.add(z);
-
-        // Color match?
         let matched=false;
         for(const seg of z.segments){
           if(seg.a&&seg.ci===b.ci){
-            seg.a=false;
-            matched=true;
-            // Damage scales with charge level
-            const pts=Math.floor(15*(1+S.combo*.3)*(0.5+b.level*.5));
-            S.score+=pts;
-            S.combo++;
+            seg.a=false;matched=true;
+            const pts=Math.floor(15*(1+S.combo*.3)*(.5+b.level*.5));
+            S.score+=pts;S.combo++;
             if(S.combo>S.maxCombo)S.maxCombo=S.combo;
             S.comboTimer=150;
-
             boom(b.x,b.y,b.color);
             addFloat(b.x,b.y-15,`+${pts}`,b.color);
             S.flash=b.color;S.flashT=3;
-            sfxHit();
-            break;
+            sfxHit();break;
           }
         }
-
         if(!matched){
           spawnP(b.x,b.y,'#555',4,2);
           if(S.combo>2)addFloat(b.x,b.y-10,'偏了!','#888');
-          S.combo=0;
-          sfxMiss();
+          S.combo=0;sfxMiss();
         }
 
-        // Zombie dead?
         if(z.alive&&z.segments.every(s=>!s.a)){
-          z.alive=false;
-          S.waveKilled++;
+          z.alive=false;S.waveKilled++;
           const killPts=50*(z.type==='boss'?3:z.type==='tank'?2:1);
           S.score+=killPts;
           boom(z.x,z.y,'#00e676');
           addFloat(z.x,z.y-30,`💀+${killPts}`,'#00e676');
           sfxKill();
 
-          // Chain explosion for penetrating shots
           if(b.penetrative){
             for(const oz of S.zombies){
               if(!oz.alive||oz===z)continue;
-              const ex=oz.x-z.x,ey=oz.y-z.y;
-              if(ex*ex+ey*ey<100*100){
-                for(const seg of oz.segments){
-                  if(seg.a){seg.a=false;break}
-                }
+              if((oz.x-z.x)**2+(oz.y-z.y)**2<10000){
+                for(const seg of oz.segments){if(seg.a){seg.a=false;break}}
                 spawnP(oz.x,oz.y,'#ff9100',8,4);
                 if(oz.segments.every(s=>!s.a)){
                   oz.alive=false;S.waveKilled++;
@@ -439,68 +378,59 @@ function update(){
             }
           }
 
-          // Wave clear?
-          if(S.waveKilled>=S.waveZombies){
-            waveClear();
-            return;
-          }
+          if(S.waveKilled>=S.waveZombies){waveClear();return}
         }
-
         z.hitFlash=6;
-        // Non-penetrating bullets die on hit
         if(!b.penetrative)b.dead=true;
         break;
       }
     }
   }
 
-  // ---- Zombies ----
+  // Zombies
   for(const z of S.zombies){
     if(!z.alive)continue;
     if(z.spawnAnim>0){z.spawnAnim--;z.opacity=1-z.spawnAnim/15}
-
     z.x+=z.vx;
-    z.y+=z.vy+Math.sin(z.walkFrame)*0.5;
+    z.y+=z.vy+Math.sin(z.walkFrame)*.5;
     z.walkFrame+=.06;
     if(z.hitFlash>0)z.hitFlash--;
 
-    // Reached left side (girl)?
+    // Hit girl?
     if(z.x<GIRL_X+30&&S.girlHitT<=0){
-      z.alive=false;
-      S.lives--;
-      S.combo=0;
-      S.shake=18;
-      S.girlHitT=60;
+      z.alive=false;S.lives--;S.combo=0;
+      S.shake=18;S.girlHitT=60;
       boom(GIRL_X,GIRL_Y,'#f44336');
       addFloat(GIRL_X,GIRL_Y-40,'-1 ❤️','#f44336');
       sfxHurt();
       if(S.lives<=0){gameOver();return}
     }
-    // Off screen left (missed)
-    if(z.x<-40)z.alive=false;
+
+    // fix #1: Zombie escaped off-screen → count as killed (missed opportunity)
+    if(z.x<-40){
+      z.alive=false;
+      S.waveKilled++;
+      S.combo=0;
+      addFloat(30,z.y,'跑了!','#888');
+      if(S.waveKilled>=S.waveZombies){waveClear();return}
+    }
   }
 
-  // Combo decay
   if(S.comboTimer>0){S.comboTimer--;if(S.comboTimer<=0)S.combo=0}
 
-  // Particles
   for(const p of S.particles){p.x+=p.vx;p.y+=p.vy;p.vy+=.1;p.l--}
   for(const f of S.floats){f.y+=f.vy;f.l--}
 
-  // Shake & flash
   S.shake=S.shake>.3?S.shake*.87:0;
   if(S.flashT>0)S.flashT--;
 
-  // Cleanup
   S.bullets=S.bullets.filter(b=>!b.dead);
   S.zombies=S.zombies.filter(z=>z.alive||z.hitFlash>0);
   S.particles=S.particles.filter(p=>p.l>0);
   S.floats=S.floats.filter(f=>f.l>0);
 
-  // UI
   document.getElementById('wt').textContent=`第 ${S.wave} 波`;
   document.getElementById('sc').textContent=`${Math.floor(S.score)} 分`;
-
   const ce=document.getElementById('cd');
   if(S.combo>=3){
     ce.textContent=`${S.combo}连击×${(1+S.combo*.3).toFixed(1)}`;
@@ -514,77 +444,55 @@ function draw(){
   cx.save();
   if(S.shake>.3)cx.translate((Math.random()-.5)*S.shake*2,(Math.random()-.5)*S.shake*2);
 
-  // BG - dark city night
   const bg=cx.createLinearGradient(0,0,0,H);
   bg.addColorStop(0,'#0a0a2e');bg.addColorStop(.4,'#151530');bg.addColorStop(1,'#1a0f20');
   cx.fillStyle=bg;cx.fillRect(0,0,W,H);
 
-  // Stars
-  cx.fillStyle='rgba(255,255,255,.15)';
-  for(let i=0;i<30;i++){
-    const sx=(i*137.5)%W,sy=(i*73.1)%(H*.4);
-    cx.beginPath();cx.arc(sx,sy,1,0,Math.PI*2);cx.fill();
-  }
+  cx.fillStyle='rgba(255,255,255,.12)';
+  for(let i=0;i<30;i++){cx.beginPath();cx.arc((i*137.5)%W,(i*73.1)%(H*.4),1,0,Math.PI*2);cx.fill()}
 
-  // Ground
   const gg=cx.createLinearGradient(0,CANNON_Y-50,0,H);
   gg.addColorStop(0,'#1a1a2e');gg.addColorStop(1,'#0f0f1a');
   cx.fillStyle=gg;cx.fillRect(0,CANNON_Y-50,W,H-CANNON_Y+50);
   cx.fillStyle='#333';cx.fillRect(0,CANNON_Y-50,W,2);
 
-  // Flash
   if(S.flashT>0&&S.flash){cx.fillStyle=S.flash+'12';cx.fillRect(0,0,W,H)}
 
-  // Girl zone (left side safe house)
   drawGirl();
-
-  // Zombies
   for(const z of S.zombies)if(z.alive||z.hitFlash>0)drawZombie(z);
 
   // Bullets
   for(const b of S.bullets){
     if(b.dead)continue;
-    // Trail
     const tl=b.trail.length;
     for(let i=0;i<tl;i++){
-      const t=b.trail[i];
-      const al=tl>1?(i+1)/tl*.5:.5;
+      const t=b.trail[i],al=tl>1?(i+1)/tl*.5:.5;
       const sz=tl>1?t.s*(i/tl)*.7:t.s*.5;
       cx.beginPath();cx.arc(t.x,t.y,sz,0,Math.PI*2);
-      cx.fillStyle=b.color+Math.floor(al*255).toString(16).padStart(2,'0');
-      cx.fill();
+      cx.fillStyle=b.color+Math.floor(al*255).toString(16).padStart(2,'0');cx.fill();
     }
-    // Bullet
     cx.beginPath();cx.arc(b.x,b.y,b.size,0,Math.PI*2);
     cx.fillStyle=b.color;cx.fill();
-    // Penetrating glow
     if(b.penetrative){
       cx.beginPath();cx.arc(b.x,b.y,b.size+8,0,Math.PI*2);
       cx.fillStyle='rgba(255,235,59,.3)';cx.fill();
       cx.beginPath();cx.arc(b.x,b.y,b.size+4,0,Math.PI*2);
       cx.fillStyle='rgba(255,255,255,.2)';cx.fill();
     }
-    // Highlight
     cx.beginPath();cx.arc(b.x-b.size*.2,b.y-b.size*.2,b.size*.4,0,Math.PI*2);
     cx.fillStyle='rgba(255,255,255,.5)';cx.fill();
   }
 
-  // Cannons
   for(const c of S.cannons)drawCannon(c);
 
-  // Particles
   for(const p of S.particles){
-    const al=p.l/p.ml;
-    cx.globalAlpha=al;cx.beginPath();
-    cx.arc(p.x,p.y,p.s*al,0,Math.PI*2);
-    cx.fillStyle=p.c;cx.fill();
+    const al=p.l/p.ml;cx.globalAlpha=al;
+    cx.beginPath();cx.arc(p.x,p.y,p.s*al,0,Math.PI*2);cx.fillStyle=p.c;cx.fill();
   }
   cx.globalAlpha=1;
 
-  // Floats
   for(const f of S.floats){
-    const al=f.l/f.ml;
-    cx.globalAlpha=al;cx.fillStyle=f.c;
+    const al=f.l/f.ml;cx.globalAlpha=al;cx.fillStyle=f.c;
     cx.font=`bold ${18+(1-al)*8}px Arial`;
     cx.textAlign='center';cx.textBaseline='middle';
     cx.fillText(f.t,f.x,f.y);
@@ -593,7 +501,6 @@ function draw(){
 
   drawLives();
   drawWaveProgress();
-
   cx.restore();
 }
 
@@ -605,121 +512,88 @@ function roundRect(x,y,w,h,r){
   cx.quadraticCurveTo(x,y,x+r,y);cx.closePath();
 }
 
-// ---- Girl ----
 function drawGirl(){
   const x=GIRL_X,y=GIRL_Y;
   const hit=S.girlHitT>0;
-  cx.save();
-  cx.globalAlpha=hit?(.4+Math.sin(S.girlHitT*.3)*.4):1;
+  cx.save();cx.globalAlpha=hit?(.4+Math.sin(S.girlHitT*.3)*.4):1;
 
-  // House/shelter
-  cx.fillStyle='#2a1a3a';
-  roundRect(x-30,y-60,60,100,8);cx.fill();
-  cx.fillStyle='#3a2a4a';
-  cx.fillRect(x-35,y-65,70,10);
-  // Door
-  cx.fillStyle='#1a0a2a';
-  roundRect(x-12,y-10,24,50,4);cx.fill();
+  cx.fillStyle='#2a1a3a';roundRect(x-30,y-60,60,100,8);cx.fill();
+  cx.fillStyle='#3a2a4a';cx.fillRect(x-35,y-65,70,10);
+  cx.fillStyle='#1a0a2a';roundRect(x-12,y-10,24,50,4);cx.fill();
 
-  // Girl peeking out
-  const headX=x+(hit?0:Math.sin(Date.now()*.003)*2);
-  cx.fillStyle='#ffe0bd';
-  cx.beginPath();cx.arc(headX,y-20,11,0,Math.PI*2);cx.fill();
-  // Hair
-  cx.fillStyle='#6B3410';
-  cx.beginPath();cx.arc(headX,y-25,11,Math.PI*.85,Math.PI*2.15);cx.fill();
-  // Eyes
-  cx.fillStyle='#333';
-  cx.beginPath();
-  cx.arc(headX-4,y-20,1.8,0,Math.PI*2);
-  cx.arc(headX+4,y-20,1.8,0,Math.PI*2);
-  cx.fill();
-  // Mouth
+  const hx=x+(hit?0:Math.sin(Date.now()*.003)*2);
+  cx.fillStyle='#ffe0bd';cx.beginPath();cx.arc(hx,y-20,11,0,Math.PI*2);cx.fill();
+  cx.fillStyle='#6B3410';cx.beginPath();cx.arc(hx,y-25,11,Math.PI*.85,Math.PI*2.15);cx.fill();
+  cx.fillStyle='#333';cx.beginPath();
+  cx.arc(hx-4,y-20,1.8,0,Math.PI*2);cx.arc(hx+4,y-20,1.8,0,Math.PI*2);cx.fill();
   cx.strokeStyle='#c0392b';cx.lineWidth=1.2;cx.beginPath();
-  if(S.lives<=1)cx.arc(headX,y-15,2.5,0,Math.PI*2);
-  else cx.arc(headX,y-14,3,.2,Math.PI-.2);
+  if(S.lives<=1)cx.arc(hx,y-15,2.5,0,Math.PI*2);
+  else cx.arc(hx,y-14,3,.2,Math.PI-.2);
   cx.stroke();
 
-  // Label
   cx.fillStyle='rgba(255,255,255,.5)';cx.font='bold 10px Arial';
   cx.textAlign='center';cx.textBaseline='middle';
   cx.fillText('🏠 安全屋',x,y+55);
-
   cx.restore();
 }
 
-// ---- Zombie ----
 function drawZombie(z){
   const{x,y,segments,sz:zsz,hf,wf,alive,op,type}=z;
-  cx.save();
-  cx.globalAlpha=op*(alive?1:hf/6);
-
+  cx.save();cx.globalAlpha=op*(alive?1:hf/6);
   const wb=Math.sin(wf*3)*3;
   const bc=hf>0?'#fff':type==='fast'?'#7a5a3a':type==='tank'?'#3a3a5a':type==='boss'?'#5a2a3a':'#4a7a4a';
   const hc=hf>0?'#fff':type==='boss'?'#7a3a4a':'#5a8a4a';
 
-  // Shadow
   cx.fillStyle='rgba(0,0,0,.25)';cx.beginPath();
   cx.ellipse(x,y+zsz*.65,zsz*.35,4,0,0,Math.PI*2);cx.fill();
 
-  // Body
   cx.fillStyle=bc;cx.beginPath();
   cx.ellipse(x+wb,y+6,zsz*.4,zsz*.5,0,0,Math.PI*2);cx.fill();
 
-  // Head
   cx.fillStyle=hc;cx.beginPath();
   cx.arc(x+wb,y-zsz*.28,zsz*.3,0,Math.PI*2);cx.fill();
 
-  // Eyes
   const eg=alive?.6+Math.sin(Date.now()*.008)*.3:.15;
-  const eyeCol=type==='boss'?'rgba(255,0,100':'rgba(255,50,50';
-  cx.fillStyle=alive?`${eyeCol},${eg})`:'#444';
+  const ec=type==='boss'?'rgba(255,0,100':'rgba(255,50,50';
+  cx.fillStyle=alive?`${ec},${eg})`:'#444';
   cx.beginPath();cx.arc(x+wb-4,y-zsz*.28,2.5,0,Math.PI*2);cx.fill();
   cx.beginPath();cx.arc(x+wb+4,y-zsz*.28,2.5,0,Math.PI*2);cx.fill();
 
-  // Boss crown
   if(type==='boss'){
-    cx.fillStyle='#ffd700';
-    cx.beginPath();
+    cx.fillStyle='#ffd700';cx.beginPath();
     cx.moveTo(x+wb-12,y-zsz*.55);cx.lineTo(x+wb-8,y-zsz*.7);
     cx.lineTo(x+wb-4,y-zsz*.58);cx.lineTo(x+wb,y-zsz*.75);
     cx.lineTo(x+wb+4,y-zsz*.58);cx.lineTo(x+wb+8,y-zsz*.7);
     cx.lineTo(x+wb+12,y-zsz*.55);cx.closePath();cx.fill();
   }
 
-  // Arms
   cx.strokeStyle=bc;cx.lineWidth=3.5;cx.lineCap='round';
   const ar=Math.sin(wf*2)*3;
   cx.beginPath();cx.moveTo(x+wb-zsz*.3,y+2);cx.lineTo(x+wb-zsz*.6,y-6+ar);cx.stroke();
   cx.beginPath();cx.moveTo(x+wb+zsz*.3,y+2);cx.lineTo(x+wb+zsz*.6,y-6-ar);cx.stroke();
 
-  // Color segments
   const sy0=y-zsz*.4;
   for(let i=0;i<segments.length;i++){
     const seg=segments[i];if(!seg.a)continue;
     const sx=x+wb+(i%2===0?-9:9),sy=sy0-i*13;
-    cx.beginPath();cx.arc(sx,sy,9,0,Math.PI*2);
-    cx.fillStyle=COL[seg.ci]+'50';cx.fill();
-    cx.beginPath();cx.arc(sx,sy,6,0,Math.PI*2);
-    cx.fillStyle=COL[seg.ci];cx.fill();
+    cx.beginPath();cx.arc(sx,sy,9,0,Math.PI*2);cx.fillStyle=COL[seg.ci]+'50';cx.fill();
+    cx.beginPath();cx.arc(sx,sy,6,0,Math.PI*2);cx.fillStyle=COL[seg.ci];cx.fill();
     cx.beginPath();cx.arc(sx-1.5,sy-1.5,2.5,0,Math.PI*2);
     cx.fillStyle='rgba(255,255,255,.5)';cx.fill();
   }
 
-  // Legs
   cx.strokeStyle=bc;cx.lineWidth=3.5;
   const la=Math.sin(wf*3)*5;
   cx.beginPath();cx.moveTo(x+wb-4,y+zsz*.4);cx.lineTo(x+wb-4-la,y+zsz*.5+12);cx.stroke();
   cx.beginPath();cx.moveTo(x+wb+4,y+zsz*.4);cx.lineTo(x+wb+4+la,y+zsz*.5+12);cx.stroke();
 
-  // HP bar for multi-segment zombies
+  // fix #5: HP bar = alive segments / total segments
   if(segments.length>1){
     const alive2=segments.filter(s=>s.a).length;
     const bw=zsz*1.2;
-    cx.fillStyle='rgba(0,0,0,.5)';
-    roundRect(x-bw/2,y-zsz-15,bw,4,2);cx.fill();
+    cx.fillStyle='rgba(0,0,0,.5)';roundRect(x-bw/2,y-zsz-15,bw,4,2);cx.fill();
     if(alive2>0){
-      cx.fillStyle=COL[segments[0].ci];
+      cx.fillStyle=alive2>segments.length/2?'#4caf50':alive2>1?'#ff9800':'#f44336';
       roundRect(x-bw/2,y-zsz-15,bw*(alive2/segments.length),4,2);cx.fill();
     }
   }
@@ -727,28 +601,21 @@ function drawZombie(z){
   cx.restore();
 }
 
-// ---- Cannon ----
 function drawCannon(c){
   const{x,y,color,colorDark,name,idx,charging,chargeLevel,recoil,glowPulse}=c;
   const ry=y+recoil;
-
   cx.save();
 
-  // Charge glow
   if(charging){
     const glow=Math.sin(glowPulse)*.15+chargeLevel*.5;
     cx.beginPath();cx.arc(x,ry-15,35+chargeLevel*15,0,Math.PI*2);
-    cx.fillStyle=color+Math.floor(glow*80).toString(16).padStart(2,'0');
-    cx.fill();
+    cx.fillStyle=color+Math.floor(glow*80).toString(16).padStart(2,'0');cx.fill();
 
-    // Charge bar above cannon
     const bw=50,bh=6;
-    cx.fillStyle='rgba(0,0,0,.6)';
-    roundRect(x-bw/2-1,ry-45,bw+2,bh+2,3);cx.fill();
+    cx.fillStyle='rgba(0,0,0,.6)';roundRect(x-bw/2-1,ry-45,bw+2,bh+2,3);cx.fill();
     cx.fillStyle=chargeLevel>=.95?'#ffeb3b':color;
-    roundRect(x-bw/2,ry-44,bw*chargeLevel,bh,2);cx.fill();
+    roundRect(x-bw/2,ry-44,bw*Math.min(chargeLevel,1),bh,2);cx.fill();
 
-    // "满!" indicator
     if(chargeLevel>=.95){
       cx.fillStyle='#ffeb3b';cx.font='bold 12px Arial';
       cx.textAlign='center';cx.textBaseline='middle';
@@ -756,75 +623,54 @@ function drawCannon(c){
     }
   }
 
-  // Base
-  cx.fillStyle='#2a2a3e';
-  roundRect(x-26,ry-2,52,18,5);cx.fill();
-
-  // Barrel
+  cx.fillStyle='#2a2a3e';roundRect(x-26,ry-2,52,18,5);cx.fill();
   cx.fillStyle=charging?color:colorDark;
   roundRect(x-10,ry-32+recoil*.3,20,32,4);cx.fill();
-
-  // Barrel opening
   cx.fillStyle=colorDark;
   cx.beginPath();cx.ellipse(x,ry-32+recoil*.3,11,5,0,0,Math.PI*2);cx.fill();
   cx.fillStyle='#111';
   cx.beginPath();cx.ellipse(x,ry-32+recoil*.3,8,3.5,0,0,Math.PI*2);cx.fill();
+  cx.fillStyle='rgba(255,255,255,.2)';cx.fillRect(x-6,ry-28+recoil*.3,4,24);
 
-  // Highlight
-  cx.fillStyle='rgba(255,255,255,.2)';
-  cx.fillRect(x-6,ry-28+recoil*.3,4,24);
-
-  // Label
   cx.fillStyle='#fff';cx.font='bold 13px Arial';
   cx.textAlign='center';cx.textBaseline='middle';
   cx.fillText(name,x,ry+26);
-
   cx.restore();
 }
 
-// ---- Lives & Progress ----
 function drawLives(){
-  const bx=12,by=H-30;
   for(let i=0;i<S.maxLives;i++){
-    cx.font='16px Arial';
-    cx.textAlign='center';cx.textBaseline='middle';
-    cx.fillText(i<S.lives?'❤️':'🖤',bx+i*22,by);
+    cx.font='16px Arial';cx.textAlign='center';cx.textBaseline='middle';
+    cx.fillText(i<S.lives?'❤️':'🖤',12+i*22,H-30);
   }
 }
 
 function drawWaveProgress(){
   if(S.ph!=='playing')return;
   const bw=W-40,pr=S.waveZombies>0?S.waveKilled/S.waveZombies:0;
-  cx.fillStyle='rgba(0,0,0,.4)';
-  roundRect(20,H-18,bw,6,3);cx.fill();
-  if(pr>0){
-    cx.fillStyle='#7c4dff';
-    roundRect(20,H-18,bw*Math.min(pr,1),6,3);cx.fill();
-  }
+  cx.fillStyle='rgba(0,0,0,.4)';roundRect(20,H-18,bw,6,3);cx.fill();
+  if(pr>0){cx.fillStyle='#7c4dff';roundRect(20,H-18,bw*Math.min(pr,1),6,3);cx.fill()}
 }
 
 // ---- Wave Management ----
 function startWave(w){
   S.wave=w;
   S.waveZombies=5+w*3+Math.floor(w*w*.2);
-  S.waveKilled=0;
-  S.waveSpawned=0;
-  S.spawnTimer=0;
+  S.waveKilled=0;S.waveSpawned=0;S.spawnTimer=0;
   S.spawnInterval=Math.max(30,90-w*3);
-  S.zombies=[];
-  S.bullets=[];
-  S.particles=[];
-  S.floats=[];
+  S.zombies=[];S.bullets=[];S.particles=[];S.floats=[];
   S.combo=0;S.comboTimer=0;
-  S.shake=0;S.flashT=0;
-  S.girlHitT=0;
+  S.shake=0;S.flashT=0;S.girlHitT=0;
   S.inputLock=false;
+  S.lastSpawnY=300;
   S.ph='playing';
   hideScreens();
 }
 
 function waveClear(){
   S.ph='waveclear';S.inputLock=true;
+  // Cancel any pending charge
+  if(S.pendingCharger!==null){cancelCharge(S.pendingCharger)}
   const bonus=S.lives*100+S.combo*10;
   S.score+=bonus;
   document.getElementById('wsc').textContent=`${Math.floor(S.score)} 分 (+${bonus}奖励)`;
@@ -834,6 +680,7 @@ function waveClear(){
 
 function gameOver(){
   S.ph='over';S.inputLock=true;
+  if(S.pendingCharger!==null){cancelCharge(S.pendingCharger)}
   document.getElementById('fs').textContent=`${Math.floor(S.score)} 分`;
   document.getElementById('fl').textContent=`坚持到第 ${S.wave} 波`;
   document.getElementById('go').classList.remove('h');
@@ -846,19 +693,12 @@ function hideScreens(){
   document.getElementById('ws').classList.add('h');
 }
 
-// ---- Buttons ----
 function btn(fn){return e=>{e.stopPropagation();ea();fn()}}
-document.getElementById('bs').addEventListener('click',btn(()=>{
-  S=freshState();initCannons();startWave(1);
-}));
-document.getElementById('br').addEventListener('click',btn(()=>{
-  S=freshState();initCannons();startWave(1);
-}));
-document.getElementById('bn').addEventListener('click',btn(()=>{
-  startWave(S.wave+1);
-}));
+document.getElementById('bs').addEventListener('click',btn(()=>{S=freshState();initCannons();startWave(1)}));
+document.getElementById('br').addEventListener('click',btn(()=>{S=freshState();initCannons();startWave(1)}));
+document.getElementById('bn').addEventListener('click',btn(()=>{startWave(S.wave+1)}));
 
-// ---- Game Loop ----
+// ---- Loop ----
 const FM=1000/60;let lf=0;
 function gl(ts){
   requestAnimationFrame(gl);
